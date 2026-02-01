@@ -1,11 +1,13 @@
 
 import React from 'react';
+import { useCoinBalance } from '../lib/hooks';
 
 interface BuyCoinsPageProps {
   onBack: () => void;
 }
 
 const BuyCoinsPage: React.FC<BuyCoinsPageProps> = ({ onBack }) => {
+  const { balance } = useCoinBalance();
   const packages = [
     { coins: '150 Koin', price: 'IDR 5.000' },
     { coins: '300 Koin', price: 'IDR 9.000' },
@@ -28,9 +30,9 @@ const BuyCoinsPage: React.FC<BuyCoinsPageProps> = ({ onBack }) => {
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
         </button>
 
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-appleGray/50 rounded-full">
-          <img src="https://img.icons8.com/fluency/48/stack-of-coins.png" alt="Coins" className="w-5 h-5 object-contain" />
-          <span className="font-bold text-appleDark text-lg">[$coins]</span>
+        <div className="flex items-center gap-1 bg-yellow-100 px-3 py-1 rounded-full">
+          <img src="https://img.icons8.com/fluency/48/stack-of-coins.png" className="w-4 h-4" alt="coin" />
+          <span className="text-sm font-bold text-yellow-700">{balance !== null ? balance : '...'}</span>
         </div>
 
         <div className="w-10 h-10 bg-gray-300 rounded-full border-2 border-white shadow-sm overflow-hidden">

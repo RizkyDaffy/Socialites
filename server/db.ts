@@ -112,6 +112,40 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email)
     `;
 
+    // ADDED: COIN ENCRYPTION - Update users table
+    await sql`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS coins_encrypted TEXT,
+      ADD COLUMN IF NOT EXISTS coins_nonce TEXT,
+      ADD COLUMN IF NOT EXISTS daily_last_claimed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS daily_streak_day INT DEFAULT 0
+    `;
+
+    // ADDED: COIN ENCRYPTION - Create coin_transactions table
+    await sql`
+      CREATE TABLE IF NOT EXISTS coin_transactions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount INT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('credit', 'debit')),
+        reason TEXT,
+        meta JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
+    // ADDED: COIN ENCRYPTION - Create coin_idempotency table
+    await sql`
+      CREATE TABLE IF NOT EXISTS coin_idempotency (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        idempotency_key TEXT NOT NULL,
+        response JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, idempotency_key)
+      )
+    `;
+
     console.log('✅ Database schema initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing database:', error);

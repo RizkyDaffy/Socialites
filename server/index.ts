@@ -414,6 +414,267 @@ app.post('/api/auth/session/heartbeat', async (req: Request, res: Response) => {
     }
 });
 
+// ADDED: COIN SYSTEM imports
+import { decryptNumber, addCoinsAtomic } from './utils/coins';
+
+// ADDED: COIN SYSTEM - Get balance and daily status
+app.get('/api/coins', async (req: Request, res: Response) => {
+    try {
+        const sessionId = req.headers.authorization?.replace('Bearer ', '');
+        if (!sessionId) return res.status(401).json({ error: 'Unauthorized' });
+
+        const sessions = await sql`SELECT user_id FROM sessions WHERE id = ${sessionId}`;
+        if (!sessions.length) return res.status(401).json({ error: 'Invalid session' });
+        const userId = sessions[0].user_id;
+
+        const users = await sql`
+            SELECT coins_encrypted, daily_last_claimed_at, daily_streak_day 
+            FROM users WHERE id = ${userId}
+        `;
+        if (!users.length) return res.status(404).json({ error: 'User not found' });
+        const user = users[0];
+
+        const balance = user.coins_encrypted ? decryptNumber(user.coins_encrypted) : 0;
+
+        // Calculate next reward info
+        const now = new Date();
+        const lastClaim = user.daily_last_claimed_at ? new Date(user.daily_last_claimed_at) : null;
+
+        let streakDay = user.daily_streak_day || 0;
+        let canClaim = false;
+        let timeUntilNextClaim = 0;
+
+        if (!lastClaim) {
+            canClaim = true;
+            streakDay = 1;
+        } else {
+            const yesterday = new Date(now);
+            yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+            yesterday.setUTCHours(0, 0, 0, 0);
+
+            const lastClaimDate = new Date(lastClaim);
+            lastClaimDate.setUTCHours(0, 0, 0, 0);
+
+            const today = new Date(now);
+            today.setUTCHours(0, 0, 0, 0);
+
+            if (lastClaimDate.getTime() === today.getTime()) {
+                // Already claimed today
+                canClaim = false;
+                // Time until tomorrow 00:00 UTC (or local? prompt said UTC)
+                // Let's stick to UTC for consistency
+                const tomorrow = new Date(today);
+                tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+                timeUntilNextClaim = tomorrow.getTime() - now.getTime();
+            } else if (lastClaimDate.getTime() === yesterday.getTime()) {
+                // Claimed yesterday, streak continues
+                canClaim = true;
+                streakDay = Math.min((user.daily_streak_day || 0) + 1, 7);
+            } else {
+                // Streak broken
+                canClaim = true;
+                streakDay = 1;
+            }
+        }
+
+        const dailyRewards = [
+            { day: 1, amount: 5 },
+            { day: 2, amount: 5 },
+            { day: 3, amount: 10 },
+            { day: 4, amount: 5 },
+            { day: 5, amount: 5 },
+            { day: 6, amount: 5 },
+            { day: 7, amount: 50 },
+        ];
+
+        const nextReward = dailyRewards.find(r => r.day === streakDay) || dailyRewards[0];
+
+        res.json({
+            coins: balance,
+            daily: {
+                claimedToday: !canClaim,
+                streakDay: user.daily_streak_day || 0, // Current stored streak
+                nextStreakDay: streakDay, // What they will get on claim
+                nextReward: nextReward.amount,
+                timeUntilNextClaim,
+                canClaim
+            }
+        });
+    } catch (error: any) {
+        console.error('Get coins error:', error);
+        res.status(500).json({ error: 'Failed to get coins' });
+    }
+});
+
+// ADDED: COIN SYSTEM - Get daily status (alias/specialized)
+app.get('/api/daily/status', async (req: Request, res: Response) => {
+    // Re-use logic or redirect? Let's just forward to coins which has all info
+    // For cleaner code in frontend, we'll keep it separate if needed, but the requirements said specific endpoint.
+    // We can implement it same as above or just one endpoint.
+    // Let's copy logic briefly or refactor. For 'patch-style', I'll just copy the needed parts to avoid refactoring the whole file structure.
+
+    // Actually, let's just use the logic from /api/coins, filtering output if needed.
+    // But to save space and time, I will make the frontend call /api/coins for everything.
+    // However, the prompt ASKED for GET /api/daily/status.
+
+    try {
+        const sessionId = req.headers.authorization?.replace('Bearer ', '');
+        if (!sessionId) return res.status(401).json({ error: 'Unauthorized' });
+
+        const sessions = await sql`SELECT user_id FROM sessions WHERE id = ${sessionId}`;
+        if (!sessions.length) return res.status(401).json({ error: 'Invalid session' });
+        const userId = sessions[0].user_id;
+
+        const users = await sql`
+            SELECT daily_last_claimed_at, daily_streak_day 
+            FROM users WHERE id = ${userId}
+        `;
+        if (!users.length) return res.status(404).json({ error: 'User not found' });
+        const user = users[0];
+
+        const now = new Date();
+        const lastClaim = user.daily_last_claimed_at ? new Date(user.daily_last_claimed_at) : null;
+
+        let streakDay = 1;
+        let canClaim = true;
+        let claimedToday = false;
+
+        if (lastClaim) {
+            const yesterday = new Date(now);
+            yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+            yesterday.setUTCHours(0, 0, 0, 0);
+
+            const lastClaimDate = new Date(lastClaim);
+            lastClaimDate.setUTCHours(0, 0, 0, 0);
+
+            const today = new Date(now);
+            today.setUTCHours(0, 0, 0, 0);
+
+            if (lastClaimDate.getTime() === today.getTime()) {
+                claimedToday = true;
+                canClaim = false;
+                streakDay = user.daily_streak_day;
+            } else if (lastClaimDate.getTime() === yesterday.getTime()) {
+                streakDay = Math.min(user.daily_streak_day + 1, 7);
+            } else {
+                streakDay = 1;
+            }
+        }
+
+        const dailyRewards = [
+            { day: 1, amount: 5 },
+            { day: 2, amount: 5 },
+            { day: 3, amount: 10 },
+            { day: 4, amount: 5 },
+            { day: 5, amount: 5 },
+            { day: 6, amount: 5 },
+            { day: 7, amount: 50 },
+        ];
+
+        res.json({
+            streakDay, // The day they are ON or will CLAIM
+            claimedToday,
+            rewards: dailyRewards
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Status error' });
+    }
+});
+
+// ADDED: COIN SYSTEM - Claim Daily Reward
+app.post('/api/daily/claim', async (req: Request, res: Response) => {
+    try {
+        const sessionId = req.headers.authorization?.replace('Bearer ', '');
+        const idempotencyKey = req.headers['idempotency-key'] as string;
+
+        if (!sessionId) return res.status(401).json({ error: 'Unauthorized' });
+        if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required' });
+
+        const sessions = await sql`SELECT user_id FROM sessions WHERE id = ${sessionId}`;
+        if (!sessions.length) return res.status(401).json({ error: 'Invalid session' });
+        const userId = sessions[0].user_id;
+
+        // Check if already claimed today
+        const users = await sql`SELECT daily_last_claimed_at, daily_streak_day FROM users WHERE id = ${userId}`;
+        const user = users[0];
+
+        const now = new Date();
+        const lastClaim = user.daily_last_claimed_at ? new Date(user.daily_last_claimed_at) : null;
+
+        if (lastClaim) {
+            const today = new Date(now);
+            today.setUTCHours(0, 0, 0, 0);
+            const lastClaimDate = new Date(lastClaim);
+            lastClaimDate.setUTCHours(0, 0, 0, 0);
+
+            if (lastClaimDate.getTime() === today.getTime()) {
+                // Double check idempotency will handle the specific transaction, but logic check first
+                // However, if we are retrying the SAME claim, idempotency logic in utils/coins should return success.
+                // But if this is a NEW request for same day, reject.
+                // We'll let the atomic function handle the balance, but we must calculate amount first.
+            }
+        }
+
+        // Logic to determine amount
+        let streakDay = 1;
+        if (lastClaim) {
+            const yesterday = new Date(now);
+            yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+            yesterday.setUTCHours(0, 0, 0, 0);
+            const lastClaimDate = new Date(lastClaim);
+            lastClaimDate.setUTCHours(0, 0, 0, 0);
+            const today = new Date(now);
+            today.setUTCHours(0, 0, 0, 0);
+
+            if (lastClaimDate.getTime() === today.getTime()) {
+                return res.status(400).json({ error: 'Already claimed today' });
+            } else if (lastClaimDate.getTime() === yesterday.getTime()) {
+                streakDay = Math.min((user.daily_streak_day || 0) + 1, 7);
+            }
+        }
+
+        const dailyRewards = [
+            { day: 1, amount: 5 },
+            { day: 2, amount: 5 },
+            { day: 3, amount: 10 },
+            { day: 4, amount: 5 },
+            { day: 5, amount: 5 },
+            { day: 6, amount: 5 },
+            { day: 7, amount: 50 },
+        ];
+        const reward = dailyRewards.find(r => r.day === streakDay) || dailyRewards[0];
+
+        // Atomic Add
+        const result = await addCoinsAtomic(userId, reward.amount, `Daily Claim Day ${streakDay}`, idempotencyKey);
+
+        if (!result.success) {
+            return res.status(400).json({ error: result.error });
+        }
+
+        // Update user daily stats if successful (and not just idempotent replay)
+        if (!result.idempotent) {
+            await sql`
+                UPDATE users 
+                SET daily_last_claimed_at = NOW(), 
+                    daily_streak_day = ${streakDay}
+                WHERE id = ${userId}
+            `;
+        }
+
+        res.json({
+            success: true,
+            balance: result.newBalance,
+            added: reward.amount,
+            streakDay,
+            transactionId: result.transactionId
+        });
+
+    } catch (error: any) {
+        console.error('Claim error:', error);
+        res.status(500).json({ error: 'Claim failed' });
+    }
+});
+
 // Logout endpoint
 app.post('/api/auth/logout', async (req: Request, res: Response) => {
     try {
