@@ -9,7 +9,60 @@ interface ServicesPageProps {
 const ServicesPage: React.FC<ServicesPageProps> = ({ onBack }) => {
   const [activeTab, setActiveTab] = useState('Pengikut');
   const tabs = ['Pengikut', 'Like', 'Share', 'Repost'];
-  const { balance } = useCoinBalance();
+  const [target, setTarget] = useState('');
+  const [purchasing, setPurchasing] = useState(false);
+  const { balance, refreshBalance } = useCoinBalance();
+
+  const handlePurchase = async (service: { label: string, cost: string }) => {
+    if (!target) {
+      alert('Mohon isi username atau link postingan');
+      return;
+    }
+
+    const cost = parseInt(service.cost);
+    const amount = parseInt(service.label);
+
+    if (balance === null || balance < cost) {
+      alert('Koin tidak cukup!');
+      return;
+    }
+
+    if (!confirm(`Beli ${amount} ${activeTab} seharga ${cost} koin?`)) return;
+
+    setPurchasing(true);
+    try {
+      const sessionId = localStorage.getItem('sessionId');
+      const res = await fetch('/api/orders/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionId}`
+        },
+        body: JSON.stringify({
+          serviceName: activeTab,
+          serviceAmount: amount,
+          coinCost: cost
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        alert(`Sukses! Order Code: ${data.orderCode}`);
+        setTarget(''); // Clear input
+        refreshBalance(); // Update balance immediately
+        // Optional: onBack() or redirect to history if requested. 
+        // User said "Redirect / inform user". I'll stick to inform for now to keep flow fluid.
+      } else {
+        alert(`Gagal: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Purchase error:', error);
+      alert('Terjadi kesalahan saat memproses order');
+    } finally {
+      setPurchasing(false);
+    }
+  };
 
   const services = [
     { label: '100', cost: '150' },
@@ -52,6 +105,8 @@ const ServicesPage: React.FC<ServicesPageProps> = ({ onBack }) => {
 
           <input
             type="text"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
             placeholder="Username / link postingan"
             className="w-full px-5 py-3.5 bg-appleGray/30 border border-gray-200 rounded-2xl text-[14px] focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/5 transition-all"
           />
@@ -77,13 +132,15 @@ const ServicesPage: React.FC<ServicesPageProps> = ({ onBack }) => {
           {services.map((service, index) => (
             <button
               key={index}
-              className="bg-white p-5 rounded-apple border-[1.5px] border-white shadow-sm flex flex-col items-start gap-4 transition-all hover:border-primary active:scale-95 text-left group"
+              disabled={purchasing}
+              onClick={() => handlePurchase(service)}
+              className="bg-white p-5 rounded-apple border-[1.5px] border-white shadow-sm flex flex-col items-start gap-4 transition-all hover:border-primary active:scale-95 text-left group disabled:opacity-50 disabled:pointer-events-none"
             >
               <div className="space-y-1">
                 <span className="text-[13px] font-semibold text-gray-300 block">{service.label} {activeTab}</span>
                 <div className="flex items-center gap-2">
                   <img src="https://img.icons8.com/fluency/48/stack-of-coins.png" className="w-6 h-6 object-contain grayscale group-hover:grayscale-0 transition-all" alt="Coin" />
-                  <span className="text-[20px] font-bold text-appleDark">{service.cost}</span>
+                  <span className={`text-[20px] font-bold ${balance !== null && balance < parseInt(service.cost) ? 'text-red-500' : 'text-appleDark'}`}>{service.cost}</span>
                 </div>
               </div>
             </button>

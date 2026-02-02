@@ -416,6 +416,8 @@ app.post('/api/auth/session/heartbeat', async (req: Request, res: Response) => {
 
 // ADDED: COIN SYSTEM imports
 import { decryptNumber, addCoinsAtomic } from './utils/coins';
+// ADDED: ORDER SYSTEM imports
+import { createOrderAtomic } from './utils/orders';
 
 // ADDED: COIN SYSTEM - Get balance and daily status
 app.get('/api/coins', async (req: Request, res: Response) => {
@@ -688,6 +690,136 @@ app.post('/api/auth/logout', async (req: Request, res: Response) => {
     } catch (error: any) {
         console.error('Logout error:', error);
         res.status(500).json({ error: 'Failed to logout', details: error.message });
+    }
+});
+
+// ADDED: ORDER SYSTEM - Create Order
+app.post('/api/orders/create', async (req: Request, res: Response) => {
+    try {
+        const sessionId = req.headers.authorization?.replace('Bearer ', '');
+        if (!sessionId) return res.status(401).json({ error: 'Unauthorized' });
+
+        const sessions = await sql`SELECT user_id FROM sessions WHERE id = ${sessionId}`;
+        if (!sessions.length) return res.status(401).json({ error: 'Invalid session' });
+        const userId = sessions[0].user_id;
+
+        const { serviceName, serviceAmount, coinCost } = req.body;
+
+        if (!serviceName || !serviceAmount || !coinCost) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const result = await createOrderAtomic(userId, serviceName, serviceAmount, coinCost);
+
+        if (!result.success) {
+            return res.status(400).json({ error: result.error });
+        }
+
+        res.json({
+            orderId: result.orderId,
+            orderCode: result.orderCode,
+            status: result.status,
+            newBalance: result.newBalance
+        });
+    } catch (error: any) {
+        console.error('Create order error:', error);
+        res.status(500).json({ error: 'Failed to create order' });
+    }
+});
+
+// ADDED: ORDER SYSTEM - Get Order History
+app.get('/api/orders/history', async (req: Request, res: Response) => {
+    try {
+        const sessionId = req.headers.authorization?.replace('Bearer ', '');
+        if (!sessionId) return res.status(401).json({ error: 'Unauthorized' });
+
+        const sessions = await sql`SELECT user_id FROM sessions WHERE id = ${sessionId}`;
+        if (!sessions.length) return res.status(401).json({ error: 'Invalid session' });
+        const userId = sessions[0].user_id;
+
+        const orders = await sql`
+            SELECT id, order_code, service_name, service_amount, coin_cost, status, created_at
+            FROM orders
+            WHERE user_id = ${userId}
+            ORDER BY created_at DESC
+        `;
+
+        const formattedOrders = orders.map(order => ({
+            id: `#${order.order_code}`,
+            rawId: order.id,
+            type: order.service_name,
+            amount: order.service_amount,
+            cost: order.coin_cost,
+            date: new Date(order.created_at).toISOString().split('T')[0], // YYYY-MM-DD
+            status: order.status.charAt(0).toUpperCase() + order.status.slice(1) // Capitalize
+        }));
+
+        res.json(formattedOrders);
+    } catch (error: any) {
+        console.error('Get history error:', error);
+        res.status(500).json({ error: 'Failed to fetch history' });
+    }
+});
+
+// ADDED: ORDER SYSTEM - Internal Status Update
+app.post('/internal/orders/update-status', async (req: Request, res: Response) => {
+    try {
+        const { orderId, serviceToken, status } = req.body;
+
+        if (!orderId || !serviceToken || !status) {
+            return res.status(400).json({ error: 'Missing fields' });
+        }
+
+        if (!['success', 'failed'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status' });
+        }
+
+        // Validate Order & Token
+        const orders = await sql`
+            SELECT id, user_id, status, service_token, coin_cost 
+            FROM orders 
+            WHERE id = ${orderId}
+        `;
+
+        if (orders.length === 0) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        const order = orders[0];
+
+        // 1. Validate Token (must match what's in DB)
+        // The token stored in DB is the authority.
+        if (order.service_token !== serviceToken) {
+            return res.status(403).json({ error: 'Invalid service token' });
+        }
+
+        // 2. Validate Order State
+        if (order.status !== 'pending') {
+            return res.status(400).json({ error: 'Order already finalized' });
+        }
+
+        // 3. Update Status
+        await sql`
+            UPDATE orders 
+            SET status = ${status}, updated_at = NOW()
+            WHERE id = ${orderId}
+        `;
+
+        // If failed, maybe refund? The prompt didn't strictly ask for refund on failure, 
+        // but typically "failed" implies refund. 
+        // "Coin cost: 600... Spend Coins Flow... transaction... insert audit".
+        // It says "Status hanya bisa diubah oleh sistem...".
+        // It does NOT explicitly say to refund on failure, but it's good practice.
+        // HOWEVER, user rules: "Fokus hanya sampai: order dibuat, order masuk history, status pending."
+        // "Task execution / boosting BELUM perlu dibuat."
+        // So I assume this endpoint is for future use or testing, but I should implement it as spec'd.
+        // I will just update status for now as requested.
+
+        res.json({ success: true, message: 'Status updated' });
+
+    } catch (error: any) {
+        console.error('Update status error:', error);
+        res.status(500).json({ error: 'Internal error' });
     }
 });
 

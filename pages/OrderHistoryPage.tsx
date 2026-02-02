@@ -1,17 +1,63 @@
-
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface OrderHistoryPageProps {
   onBack: () => void;
 }
 
+interface Order {
+  id: string;
+  type: string;
+  amount: string;
+  date: string;
+  status: string;
+  icon: string;
+  cost: number;
+}
+
 const OrderHistoryPage: React.FC<OrderHistoryPageProps> = ({ onBack }) => {
-  const orders = [
-    { id: '#SB-9281', type: 'Follower', amount: '500', date: 'Oct 24, 2023', status: 'Success', icon: '👤' },
-    { id: '#SB-9275', type: 'Like', amount: '1000', date: 'Oct 22, 2023', status: 'Pending', icon: '❤️' },
-    { id: '#SB-9260', type: 'Share', amount: '200', date: 'Oct 15, 2023', status: 'Failed', icon: '🔗' },
-    { id: '#SB-9255', type: 'Follower', amount: '100', date: 'Oct 10, 2023', status: 'Success', icon: '👤' },
-  ];
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchOrders = async () => {
+      try {
+        const sessionId = localStorage.getItem('sessionId');
+        const res = await fetch('/api/orders/history', {
+          headers: { 'Authorization': `Bearer ${sessionId}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          // Map data and add icons
+          const mapped = data.map((o: any) => ({
+            id: o.id,
+            type: o.type,
+            amount: o.amount.toString(),
+            date: o.date,
+            status: o.status,
+            cost: o.cost,
+            icon: getIcon(o.type)
+          }));
+          setOrders(mapped);
+        }
+      } catch (error) {
+        console.error('Failed to fetch orders', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchOrders();
+  }, []);
+
+  const getIcon = (type: string) => {
+    switch (type) {
+      case 'Pengikut': return '👤'; // Matches 'Follower' if translated, but tab says 'Pengikut'
+      case 'Follower': return '👤';
+      case 'Like': return '❤️';
+      case 'Share': return '🔗';
+      case 'Repost': return '🔁';
+      default: return '📦';
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -26,18 +72,20 @@ const OrderHistoryPage: React.FC<OrderHistoryPageProps> = ({ onBack }) => {
     <div className="min-h-screen bg-appleGray flex flex-col">
       {/* Top Bar */}
       <header className="bg-white px-6 py-4 flex items-center justify-between sticky top-0 z-10 border-b border-gray-100">
-        <button 
+        <button
           onClick={onBack}
           className="p-2 -ml-2 text-appleDark hover:bg-gray-100 rounded-full transition-colors active:scale-90"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></svg>
         </button>
         <h1 className="text-lg font-bold">Order History</h1>
         <div className="w-8"></div> {/* Spacer */}
       </header>
 
       <main className="flex-1 p-5 space-y-4 max-w-lg mx-auto w-full">
-        {orders.length > 0 ? (
+        {loading ? (
+          <div className="flex justify-center pt-20 text-gray-400">Loading...</div>
+        ) : orders.length > 0 ? (
           orders.map((order) => (
             <div key={order.id} className="bg-white rounded-apple p-5 shadow-sm border border-white flex items-center justify-between group transition-all hover:shadow-md">
               <div className="flex items-center gap-4">
@@ -51,8 +99,13 @@ const OrderHistoryPage: React.FC<OrderHistoryPageProps> = ({ onBack }) => {
                   <p className="text-[12px] text-gray-400 mt-0.5">{order.id} • {order.date}</p>
                 </div>
               </div>
-              <div className={`px-3 py-1.5 rounded-full text-[11px] font-bold ${getStatusColor(order.status)}`}>
-                {order.status}
+              <div className="text-right">
+                <div className={`px-3 py-1.5 rounded-full text-[11px] font-bold ${getStatusColor(order.status)} inline-block mb-1`}>
+                  {order.status}
+                </div>
+                <div className="text-[11px] text-gray-400 font-semibold">
+                  {order.cost} Coins
+                </div>
               </div>
             </div>
           ))

@@ -146,6 +146,22 @@ export async function initializeDatabase() {
       )
     `;
 
+    // ADDED: ORDER SYSTEM - Create orders table
+    await sql`
+      CREATE TABLE IF NOT EXISTS orders (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        order_code TEXT UNIQUE NOT NULL,
+        service_name TEXT NOT NULL,
+        service_amount INT NOT NULL,
+        coin_cost INT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'success', 'failed')),
+        service_token TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
     console.log('✅ Database schema initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing database:', error);
