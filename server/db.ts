@@ -162,6 +162,31 @@ export async function initializeDatabase() {
       )
     `;
 
+    // ADDED: TOP UP SYSTEM - Create coin_topups table
+    await sql`
+      CREATE TABLE IF NOT EXISTS coin_topups (
+        id_topup UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        coins_encrypted TEXT NOT NULL,
+        price INTEGER NOT NULL,
+        status_encrypted TEXT NOT NULL,
+        midtrans_order_id TEXT,
+        snap_token TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expired_at TIMESTAMP NOT NULL
+      )
+    `;
+
+    // ADDED: MIDTRANS - Create notifications table for audit
+    await sql`
+      CREATE TABLE IF NOT EXISTS midtrans_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        midtrans_order_id TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
     console.log('✅ Database schema initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing database:', error);

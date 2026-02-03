@@ -13,12 +13,28 @@ import BuyCoinsPage from './pages/BuyCoinsPage';
 import OrderHistoryPage from './pages/OrderHistoryPage';
 import BonusHarianPage from './pages/BonusHarianPage';
 
-type Page = 'login' | 'signup' | 'otp' | 'dashboard' | 'earnCoins' | 'mission' | 'services' | 'buyCoins' | 'orderHistory' | 'dailyBonus';
+import { TopupSuccessPage, TopupPendingPage, TopupFailedPage } from './pages/TopupResultPages';
+
+type Page = 'login' | 'signup' | 'otp' | 'dashboard' | 'earnCoins' | 'mission' | 'services' | 'buyCoins' | 'orderHistory' | 'dailyBonus' | 'topupSuccess' | 'topupPending' | 'topupFailed';
 
 function AppContent() {
   const { isAuthenticated, user, logout } = useAuth();
   const [currentPage, setCurrentPage] = useState<Page>('login');
   const [pendingEmail, setPendingEmail] = useState<string>('');
+
+  // Handle URL redirect from Midtrans
+  React.useEffect(() => {
+    const path = window.location.pathname;
+    if (path === '/topup/success') setCurrentPage('topupSuccess');
+    if (path === '/topup/pending') setCurrentPage('topupPending');
+    if (path === '/topup/failed') setCurrentPage('topupFailed');
+  }, []);
+
+  const handleBackToApp = () => {
+    // Clean URL
+    window.history.replaceState(null, '', '/');
+    setCurrentPage('buyCoins');
+  };
 
   // Handle successful login
   const handleLoginSuccess = (needsOtp: boolean, email?: string) => {
@@ -91,6 +107,15 @@ function AppContent() {
         )}
         {currentPage === 'dailyBonus' && (
           <BonusHarianPage onBack={() => setCurrentPage('earnCoins')} />
+        )}
+        {currentPage === 'topupSuccess' && (
+          <TopupSuccessPage onBack={handleBackToApp} />
+        )}
+        {currentPage === 'topupPending' && (
+          <TopupPendingPage onBack={handleBackToApp} />
+        )}
+        {currentPage === 'topupFailed' && (
+          <TopupFailedPage onBack={handleBackToApp} />
         )}
       </ProtectedRoute>
     );

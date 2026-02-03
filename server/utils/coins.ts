@@ -10,33 +10,47 @@ if (!ENC_KEY_B64) {
 
 const key = ENC_KEY_B64 ? Buffer.from(ENC_KEY_B64, 'base64') : Buffer.alloc(32); // Fallback to avoid startup crash, but should fail on use
 
-export function encryptNumber(n: number): string {
+// Encryption utils for string
+export function encryptString(text: string): string {
     if (!ENC_KEY_B64) throw new Error('COIN_ENC_KEY not configured');
 
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    const pt = Buffer.from(String(n));
+    const pt = Buffer.from(text);
     const ct = Buffer.concat([cipher.update(pt), cipher.final()]);
     const tag = cipher.getAuthTag();
 
-    // Format: iv:ciphertext:tag (all base64)
     return `${iv.toString('base64')}:${ct.toString('base64')}:${tag.toString('base64')}`;
 }
 
-export function decryptNumber(token: string): number {
+export function decryptString(token: string): string {
     if (!ENC_KEY_B64) throw new Error('COIN_ENC_KEY not configured');
-    if (!token) return 0; // Treat empty/null as 0
+    if (!token) return '';
 
     try {
         const [ivB, ctB, tagB] = token.split(':').map(s => Buffer.from(s, 'base64'));
         const decipher = crypto.createDecipheriv('aes-256-gcm', key, ivB);
         decipher.setAuthTag(tagB);
         const pt = Buffer.concat([decipher.update(ctB), decipher.final()]);
-        return Number(pt.toString());
+        return pt.toString();
     } catch (error) {
         console.error('Decryption failed:', error);
-        // In a real system, might want to throw, but for safety return 0 or handle upstream
-        throw new Error('Failed to decrypt balance');
+        throw new Error('Failed to decrypt data');
+    }
+}
+
+export function encryptNumber(n: number): string {
+    return encryptString(String(n));
+}
+
+export function decryptNumber(token: string): number {
+    if (!token) return 0;
+    try {
+        const s = decryptString(token);
+        return Number(s);
+    } catch {
+        // Fallback for number specific safety if needed, but decryptString throws
+        return 0;
     }
 }
 

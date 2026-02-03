@@ -92,8 +92,8 @@ const SignupPage: React.FC<SignupPageProps> = ({ onNavigate, onSignupSuccess }) 
         <div className="flex flex-col items-center text-center mb-8">
           <div className="w-14 h-14 bg-primary rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20 mb-6 overflow-hidden">
             <img
-              src="https://img.icons8.com/fluency-systems-filled/96/ffffff/rocket.png"
-              alt="SocialBoost Logo"
+              src="/public/img/logo.png"
+              alt="Socialites Logo"
               className="w-7 h-7 object-contain"
             />
           </div>

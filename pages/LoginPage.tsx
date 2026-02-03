@@ -63,12 +63,12 @@ const LoginPage: React.FC<LoginPageProps> = ({ onNavigate, onLoginSuccess }) => 
         <div className="flex flex-col items-center text-center mb-10">
           <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center shadow-lg shadow-primary/30 mb-6 overflow-hidden">
             <img
-              src="https://img.icons8.com/fluency-systems-filled/96/ffffff/rocket.png"
-              alt="SocialBoost Logo"
+              src="/public/img/logo.png"
+              alt="Socialites Logo"
               className="w-8 h-8 object-contain"
             />
           </div>
-          <h1 className="text-3xl font-bold tracking-tight text-appleDark mb-2">SocialBoost</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-appleDark mb-2">Socialites</h1>
           <p className="text-gray-400 text-[15px]">Sign in to elevate your social presence</p>
         </div>
 
