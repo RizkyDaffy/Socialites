@@ -25,9 +25,9 @@ function AppContent() {
   // Handle URL redirect from Midtrans
   React.useEffect(() => {
     const path = window.location.pathname;
-    if (path === '/topup/success') setCurrentPage('topupSuccess');
-    if (path === '/topup/pending') setCurrentPage('topupPending');
-    if (path === '/topup/failed') setCurrentPage('topupFailed');
+    if (path === 'topup/success') setCurrentPage('topupSuccess');
+    if (path === 'topup/pending') setCurrentPage('topupPending');
+    if (path === 'topup/failed') setCurrentPage('topupFailed');
   }, []);
 
   const handleBackToApp = () => {
