@@ -21,23 +21,45 @@ export interface CreateTopupResult {
 export async function createTopup(userId: string, packageCoins: number, price: number): Promise<CreateTopupResult> {
     try {
         const idTopup = crypto.randomUUID();
-        const orderId = `TOPUP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        // Use crypto.randomUUID() for order_id to ensure uniqueness and handle high concurrency
+        const orderId = `TOPUP-${crypto.randomUUID()}`;
 
         // ADDED: MIDTRANS FIX - Prefer env var, fallback to localhost
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        // Robust URL handling: remove trailing slash if present
+        const rawFrontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = rawFrontendUrl.replace(/\/$/, '');
 
         // ADDED: MIDTRANS FIX - Ensure integer amount
         const grossAmount = Math.round(price);
 
-        // ADDED: MIDTRANS FIX - 60 minute expiration (1 minute was too short for OTP)
+        // ADDED: MIDTRANS FIX - 60 minute expiration
         const expiryDuration = 60;
         const expiryUnit = 'minutes';
+
+        // ADDED: MIDTRANS PROD FIX - Item Details
+        // Adding item_details is recommended for robust transaction handling and data consistency
+        const itemDetails = [{
+            id: `PKG-${packageCoins}`,
+            price: grossAmount,
+            quantity: 1,
+            name: `${packageCoins} Coins`,
+            category: "Virtual Currency",
+            merchant_name: "Socialites"
+        }];
 
         // Create Snap Transaction
         const parameter = {
             transaction_details: {
                 order_id: orderId,
                 gross_amount: grossAmount
+            },
+            item_details: itemDetails,
+            customer_details: {
+                // Minimal customer details, using userId as placeholder
+                // In a real app, you might fetch user's name, email, phone from your DB
+                first_name: userId,
+                email: `${userId}@example.com`, // Placeholder email
+                phone: "08123456789" // Placeholder phone
             },
             credit_card: {
                 secure: true
@@ -191,17 +213,24 @@ export async function handleMidtransWebhook(notification: any) {
                 WHERE id_topup = ${topup.id_topup}
             `;
 
+
             // If success, add coins
             if (success) {
                 const coins = Number(decryptString(topup.coins_encrypted));
-                // Ensure atomic addition
-                await addCoinsAtomic(
+                // FIX: CRITICAL - Check if coin credit actually succeeds
+                const coinResult = await addCoinsAtomic(
                     topup.user_id,
                     coins,
                     `Topup ${orderId}`,
                     orderId // idempotency key using orderId
                 );
-                console.log(`Coins added for ${topup.user_id} via webhook`);
+
+                if (coinResult.success) {
+                    console.log(`[MIDTRANS] Coins added for ${topup.user_id} via webhook: ${coins} coins, new balance: ${coinResult.newBalance}`);
+                } else {
+                    console.error(`[MIDTRANS ERROR] Failed to add coins for ${topup.user_id}: ${coinResult.error}`);
+                    // Don't throw - we already logged the webhook, just log the error
+                }
             }
         }
 

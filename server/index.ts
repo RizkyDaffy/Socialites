@@ -440,12 +440,13 @@ app.get('/api/coins', async (req: Request, res: Response) => {
 
         const balance = user.coins_encrypted ? decryptNumber(user.coins_encrypted) : 0;
 
-        // Calculate next reward info
+        // FIX: daily claim guard - Calculate next reward info
         const now = new Date();
         const lastClaim = user.daily_last_claimed_at ? new Date(user.daily_last_claimed_at) : null;
 
-        let streakDay = user.daily_streak_day || 0;
-        let canClaim = false;
+        // FIX: daily claim guard - Initialize to Day 1 and claimable for new users
+        let streakDay = 1;
+        let canClaim = true;
         let timeUntilNextClaim = 0;
 
         if (!lastClaim) {
@@ -497,8 +498,9 @@ app.get('/api/coins', async (req: Request, res: Response) => {
             coins: balance,
             daily: {
                 claimedToday: !canClaim,
-                streakDay: user.daily_streak_day || 0, // Current stored streak
-                nextStreakDay: streakDay, // What they will get on claim
+                // FIX: daily claim guard - Return nextStreakDay (what they WILL claim)
+                streakDay: streakDay,
+                nextStreakDay: streakDay,
                 nextReward: nextReward.amount,
                 timeUntilNextClaim,
                 canClaim

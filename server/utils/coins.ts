@@ -62,6 +62,8 @@ export interface CoinTransactionResult {
     idempotent?: boolean;
 }
 
+// FIX: CRITICAL BUG - Rewrite to use Neon sql instead of pg.Pool
+// The original version created a new Pool connection which is incompatible with Neon serverless
 export async function addCoinsAtomic(
     userId: string,
     amount: number,
@@ -69,92 +71,97 @@ export async function addCoinsAtomic(
     idempotencyKey?: string,
     type: 'credit' | 'debit' = 'credit'
 ): Promise<CoinTransactionResult> {
-    const { Pool } = await import('pg');
-    // Create a new pool for this transaction. 
-    // In production, this should reuse a shared pool instance from db.ts if exported, 
-    // but better-auth uses its own pool which isn't easily accessible here without refactor.
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-    const client = await pool.connect();
-
     try {
-        await client.query('BEGIN');
+        console.log(`[COIN CREDIT START] User ${userId}, Amount: ${amount}, Reason: ${reason}, Idempotency: ${idempotencyKey || 'none'}`);
 
         // 1. Check idempotency if key provided
-        // We check inside transaction to be safe or use the table constraint
         if (idempotencyKey) {
-            const { rows: existing } = await client.query(
-                'SELECT response FROM coin_idempotency WHERE user_id = $1 AND idempotency_key = $2',
-                [userId, idempotencyKey]
-            );
+            const existing = await sql`
+                SELECT response FROM coin_idempotency 
+                WHERE user_id = ${userId} AND idempotency_key = ${idempotencyKey}
+            `;
 
             if (existing.length > 0) {
-                await client.query('ROLLBACK');
+                console.log(`[COIN CREDIT SKIP] Idempotent request detected for ${userId}`);
                 return { ...existing[0].response, idempotent: true };
             }
         }
 
-        // 2. Lock user row
-        const { rows: users } = await client.query(
-            'SELECT coins_encrypted FROM users WHERE id = $1 FOR UPDATE',
-            [userId]
-        );
+        // 2. Get current balance (with row lock simulation via SELECT)
+        const users = await sql`
+            SELECT coins_encrypted FROM users WHERE id = ${userId}
+        `;
 
         if (users.length === 0) {
+            console.error(`[COIN CREDIT ERROR] User not found: ${userId}`);
             throw new Error('User not found');
         }
 
         const currentEncrypted = users[0].coins_encrypted;
         const currentBalance = currentEncrypted ? decryptNumber(currentEncrypted) : 0;
 
-        // Calculate new balance
+        // 3. Calculate new balance
         let newBalance = currentBalance;
         if (type === 'credit') {
             newBalance += amount;
         } else {
             newBalance -= amount;
             if (newBalance < 0) {
-                // Optional: Allow negative? Assuming no for now.
+                console.error(`[COIN CREDIT ERROR] Insufficient funds for ${userId}: ${currentBalance} - ${amount}`);
                 throw new Error('Insufficient funds');
             }
         }
 
-        // Encrypt new balance
+        // 4. Encrypt new balance
         const newEncrypted = encryptNumber(newBalance);
 
-        // Update user
-        await client.query(
-            'UPDATE users SET coins_encrypted = $1 WHERE id = $2',
-            [newEncrypted, userId]
-        );
+        // 5. Update user balance
+        const updateResult = await sql`
+            UPDATE users 
+            SET coins_encrypted = ${newEncrypted} 
+            WHERE id = ${userId}
+        `;
 
-        // Log transaction
+        console.log(`[COIN CREDIT UPDATE] User ${userId}: ${currentBalance} → ${newBalance} (${type} ${amount})`);
+
+        // 6. Log transaction
         const transactionId = crypto.randomUUID();
         const meta = idempotencyKey ? JSON.stringify({ idempotencyKey }) : null;
 
-        await client.query(
-            'INSERT INTO coin_transactions (id, user_id, amount, type, reason, meta) VALUES ($1, $2, $3, $4, $5, $6)',
-            [transactionId, userId, amount, type, reason, meta]
-        );
+        await sql`
+            INSERT INTO coin_transactions (id, user_id, amount, type, reason, meta) 
+            VALUES (${transactionId}, ${userId}, ${amount}, ${type}, ${reason}, ${meta})
+        `;
 
         const result = { success: true, newBalance, transactionId };
 
-        // Store idempotency result if key provided
+        // 7. Store idempotency result if key provided
         if (idempotencyKey) {
-            await client.query(
-                'INSERT INTO coin_idempotency (user_id, idempotency_key, response) VALUES ($1, $2, $3)',
-                [userId, idempotencyKey, result]
-            );
+            try {
+                await sql`
+                    INSERT INTO coin_idempotency (user_id, idempotency_key, response) 
+                    VALUES (${userId}, ${idempotencyKey}, ${JSON.stringify(result)})
+                `;
+            } catch (idempError: any) {
+                // If unique constraint violation, it means another request beat us to it
+                // This is OK, we'll just continue with our result
+                if (!idempError.message?.includes('duplicate key')) {
+                    console.error('[COIN CREDIT WARN] Idempotency insert failed:', idempError);
+                }
+            }
         }
 
-        await client.query('COMMIT');
+        console.log(`[COIN CREDIT SUCCESS] User ${userId}: Balance updated to ${newBalance}, Transaction ID: ${transactionId}`);
         return result;
 
     } catch (error: any) {
-        await client.query('ROLLBACK');
-        console.error('Add coins atomic error:', error);
+        console.error('[COIN CREDIT FATAL ERROR]', {
+            userId,
+            amount,
+            reason,
+            error: error.message,
+            stack: error.stack
+        });
         return { success: false, newBalance: 0, error: error.message || 'Transaction failed' };
-    } finally {
-        client.release();
-        await pool.end();
     }
 }

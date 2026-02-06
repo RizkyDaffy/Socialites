@@ -10,8 +10,14 @@ export const TopupSuccessPage: React.FC<ResultPageProps> = ({ onBack }) => {
     const { refreshBalance } = useCoinBalance();
 
     useEffect(() => {
-        refreshBalance();
-    }, []);
+        // FIX: coin credit shared logic - Force refresh with retry to handle webhook delays
+        const refresh = async () => {
+            await refreshBalance();
+            // Retry after 2 seconds in case webhook is still processing
+            setTimeout(() => refreshBalance(), 2000);
+        };
+        refresh();
+    }, [refreshBalance]);
 
     return (
         <div className="min-h-screen bg-green-50 flex flex-col items-center justify-center p-6 text-center">
