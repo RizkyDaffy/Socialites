@@ -1,6 +1,7 @@
 
 import crypto from 'crypto';
 import { sql } from '../db';
+import { Pool } from 'pg';
 
 // Ensure COIN_ENC_KEY is set
 const ENC_KEY_B64 = process.env.COIN_ENC_KEY;
@@ -8,7 +9,7 @@ if (!ENC_KEY_B64) {
     console.warn('WARNING: COIN_ENC_KEY is not set. Coin system will fail if used.');
 }
 
-const key = ENC_KEY_B64 ? Buffer.from(ENC_KEY_B64, 'base64') : Buffer.alloc(32); // Fallback to avoid startup crash, but should fail on use
+const key = ENC_KEY_B64 ? Buffer.from(ENC_KEY_B64, 'base64') : Buffer.alloc(32);
 
 // Encryption utils for string
 export function encryptString(text: string): string {
@@ -49,7 +50,6 @@ export function decryptNumber(token: string): number {
         const s = decryptString(token);
         return Number(s);
     } catch {
-        // Fallback for number specific safety if needed, but decryptString throws
         return 0;
     }
 }
@@ -62,8 +62,27 @@ export interface CoinTransactionResult {
     idempotent?: boolean;
 }
 
-// FIX: CRITICAL BUG - Rewrite to use Neon sql instead of pg.Pool
-// The original version created a new Pool connection which is incompatible with Neon serverless
+// FIX: CRITICAL - Use shared pool for proper connection management
+let sharedPool: Pool | null = null;
+
+function getPool(): Pool {
+    if (!sharedPool) {
+        sharedPool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            max: 10, // Maximum pool size
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000,
+        });
+
+        sharedPool.on('error', (err) => {
+            console.error('[POOL ERROR]', err);
+        });
+    }
+    return sharedPool;
+}
+
+// FIX: CRITICAL BUG - Use pg.Pool with proper transaction support
+// Neon serverless sql() doesn't support BEGIN/COMMIT transactions
 export async function addCoinsAtomic(
     userId: string,
     amount: number,
@@ -71,28 +90,36 @@ export async function addCoinsAtomic(
     idempotencyKey?: string,
     type: 'credit' | 'debit' = 'credit'
 ): Promise<CoinTransactionResult> {
+    const pool = getPool();
+    const client = await pool.connect();
+
     try {
         console.log(`[COIN CREDIT START] User ${userId}, Amount: ${amount}, Reason: ${reason}, Idempotency: ${idempotencyKey || 'none'}`);
 
+        await client.query('BEGIN');
+
         // 1. Check idempotency if key provided
         if (idempotencyKey) {
-            const existing = await sql`
-                SELECT response FROM coin_idempotency 
-                WHERE user_id = ${userId} AND idempotency_key = ${idempotencyKey}
-            `;
+            const { rows: existing } = await client.query(
+                'SELECT response FROM coin_idempotency WHERE user_id = $1 AND idempotency_key = $2',
+                [userId, idempotencyKey]
+            );
 
             if (existing.length > 0) {
+                await client.query('ROLLBACK');
                 console.log(`[COIN CREDIT SKIP] Idempotent request detected for ${userId}`);
                 return { ...existing[0].response, idempotent: true };
             }
         }
 
-        // 2. Get current balance (with row lock simulation via SELECT)
-        const users = await sql`
-            SELECT coins_encrypted FROM users WHERE id = ${userId}
-        `;
+        // 2. Lock user row and get current balance
+        const { rows: users } = await client.query(
+            'SELECT coins_encrypted FROM users WHERE id = $1 FOR UPDATE',
+            [userId]
+        );
 
         if (users.length === 0) {
+            await client.query('ROLLBACK');
             console.error(`[COIN CREDIT ERROR] User not found: ${userId}`);
             throw new Error('User not found');
         }
@@ -107,6 +134,7 @@ export async function addCoinsAtomic(
         } else {
             newBalance -= amount;
             if (newBalance < 0) {
+                await client.query('ROLLBACK');
                 console.error(`[COIN CREDIT ERROR] Insufficient funds for ${userId}: ${currentBalance} - ${amount}`);
                 throw new Error('Insufficient funds');
             }
@@ -116,11 +144,10 @@ export async function addCoinsAtomic(
         const newEncrypted = encryptNumber(newBalance);
 
         // 5. Update user balance
-        const updateResult = await sql`
-            UPDATE users 
-            SET coins_encrypted = ${newEncrypted} 
-            WHERE id = ${userId}
-        `;
+        await client.query(
+            'UPDATE users SET coins_encrypted = $1 WHERE id = $2',
+            [newEncrypted, userId]
+        );
 
         console.log(`[COIN CREDIT UPDATE] User ${userId}: ${currentBalance} → ${newBalance} (${type} ${amount})`);
 
@@ -128,33 +155,27 @@ export async function addCoinsAtomic(
         const transactionId = crypto.randomUUID();
         const meta = idempotencyKey ? JSON.stringify({ idempotencyKey }) : null;
 
-        await sql`
-            INSERT INTO coin_transactions (id, user_id, amount, type, reason, meta) 
-            VALUES (${transactionId}, ${userId}, ${amount}, ${type}, ${reason}, ${meta})
-        `;
+        await client.query(
+            'INSERT INTO coin_transactions (id, user_id, amount, type, reason, meta) VALUES ($1, $2, $3, $4, $5, $6)',
+            [transactionId, userId, amount, type, reason, meta]
+        );
 
         const result = { success: true, newBalance, transactionId };
 
         // 7. Store idempotency result if key provided
         if (idempotencyKey) {
-            try {
-                await sql`
-                    INSERT INTO coin_idempotency (user_id, idempotency_key, response) 
-                    VALUES (${userId}, ${idempotencyKey}, ${JSON.stringify(result)})
-                `;
-            } catch (idempError: any) {
-                // If unique constraint violation, it means another request beat us to it
-                // This is OK, we'll just continue with our result
-                if (!idempError.message?.includes('duplicate key')) {
-                    console.error('[COIN CREDIT WARN] Idempotency insert failed:', idempError);
-                }
-            }
+            await client.query(
+                'INSERT INTO coin_idempotency (user_id, idempotency_key, response) VALUES ($1, $2, $3)',
+                [userId, idempotencyKey, result]
+            );
         }
 
+        await client.query('COMMIT');
         console.log(`[COIN CREDIT SUCCESS] User ${userId}: Balance updated to ${newBalance}, Transaction ID: ${transactionId}`);
         return result;
 
     } catch (error: any) {
+        await client.query('ROLLBACK');
         console.error('[COIN CREDIT FATAL ERROR]', {
             userId,
             amount,
@@ -163,5 +184,7 @@ export async function addCoinsAtomic(
             stack: error.stack
         });
         return { success: false, newBalance: 0, error: error.message || 'Transaction failed' };
+    } finally {
+        client.release();
     }
 }
